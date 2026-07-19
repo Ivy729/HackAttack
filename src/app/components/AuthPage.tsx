@@ -1,9 +1,15 @@
 import { useState } from "react";
 import { Shield, Eye, EyeOff, ArrowLeft, CheckCircle, AlertCircle, User, ShieldCheck } from "lucide-react";
 import type { AuthUser } from "./shared";
-import { USERS } from "./shared";
+import { DEMO_PASSWORD, login, logout, registerUser, resetPassword } from "../../services/auth";
 
 type Role = "user" | "admin";
+type AuthView = "login" | "signup" | "forgot";
+
+const DEPTS = [
+  "Engineering", "Legal", "Finance", "Marketing", "HR",
+  "Sales", "Product", "Research", "Design", "Operations",
+];
 
 function RolePicker({ role, onChange }: { role: Role; onChange: (r: Role) => void }) {
   return (
@@ -36,74 +42,100 @@ function RolePicker({ role, onChange }: { role: Role; onChange: (r: Role) => voi
   );
 }
 
-type AuthView = "login" | "signup" | "forgot";
-
-const DEPTS = ["Engineering","Legal","Finance","Marketing","HR","Sales","Product","Research","Design","Operations"];
-
-function resolveUser(email: string): AuthUser {
-  if (email.toLowerCase() === "admin@acme.com") {
-    return { name: "Admin Kumar", email: "admin@acme.com", dept: "Security", role: "admin", initials: "AK" };
-  }
-  const found = USERS.find(u => u.email.toLowerCase() === email.toLowerCase());
-  if (found) {
-    return {
-      name: found.name,
-      email: found.email,
-      dept: found.dept,
-      role: "user",
-      initials: found.name.split(" ").map(n => n[0]).join(""),
-    };
-  }
-  const initials = email.split("@")[0].split(".").map((p: string) => p[0]?.toUpperCase() ?? "").join("").slice(0, 2) || "U";
-  return { name: email.split("@")[0].replace(".", " ").replace(/\b\w/g, c => c.toUpperCase()), email, dept: "General", role: "user", initials };
-}
-
-function PasswordField({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+function PasswordField({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
   const [show, setShow] = useState(false);
   return (
     <div className="relative">
       <input
         type={show ? "text" : "password"}
         value={value}
-        onChange={e => onChange(e.target.value)}
+        onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder ?? "Password"}
         className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 pr-10"
       />
-      <button type="button" onClick={() => setShow(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors">
+      <button
+        type="button"
+        onClick={() => setShow((v) => !v)}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+      >
         {show ? <EyeOff size={14} /> : <Eye size={14} />}
       </button>
     </div>
   );
 }
 
-function LoginView({ onLogin, onView }: { onLogin: (u: AuthUser) => void; onView: (v: AuthView) => void }) {
-  const [role, setRole]         = useState<Role>("user");
-  const [email, setEmail]       = useState("");
+function LoginView({
+  onLogin,
+  onView,
+}: {
+  onLogin: (u: AuthUser) => void;
+  onView: (v: AuthView) => void;
+}) {
+  const [role, setRole] = useState<Role>("user");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError]       = useState("");
-  const [loading, setLoading]   = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handleRoleChange = (r: Role) => {
     setRole(r);
     setError("");
-    setEmail(r === "admin" ? "admin@acme.com" : "james.wu@acme.com");
-    setPassword("demo1234");
   };
 
-  const submit = (e: React.FormEvent) => {
+  const fillDemo = (r: Role) => {
+    setRole(r);
+    setError("");
+    setEmail(r === "admin" ? "admin@acme.com" : "james.wu@acme.com");
+    setPassword(DEMO_PASSWORD);
+  };
+
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (!email || !password) { setError("Please fill in all fields."); return; }
-    if (!email.includes("@")) { setError("Enter a valid email address."); return; }
-    if (role === "admin" && email !== "admin@acme.com") {
-      setError("Admin access requires admin@acme.com credentials.");
+
+    if (!email || !password) {
+      setError("Please fill in all fields.");
       return;
     }
+    if (!email.includes("@")) {
+      setError("Enter a valid email address.");
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => {
+    try {
+      const result = await login(email, password);
+
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+
+      // Role picker must match the account's actual role
+      if (result.user.role !== role) {
+        await logout();
+        setError(
+          result.user.role === "admin"
+            ? "This is an admin account. Switch to Admin to sign in."
+            : "This account does not have admin access. Switch to Employee to sign in."
+        );
+        return;
+      }
+
+      onLogin(result.user);
+    } catch {
+      setError("Something went wrong.");
+    } finally {
       setLoading(false);
-      onLogin(resolveUser(email));
-    }, 800);
+    }
   };
 
   return (
@@ -115,15 +147,18 @@ function LoginView({ onLogin, onView }: { onLogin: (u: AuthUser) => void; onView
 
       <RolePicker role={role} onChange={handleRoleChange} />
 
-      {/* Role context hint */}
-      <div className={`text-xs px-3 py-2 rounded border flex items-start gap-2 ${
-        role === "admin"
-          ? "bg-[#0f1923]/5 border-[#0f1923]/20 text-gray-700"
-          : "bg-blue-50 border-blue-100 text-blue-800"
-      }`}>
-        {role === "admin"
-          ? <ShieldCheck size={12} className="mt-0.5 flex-shrink-0 text-gray-500" />
-          : <User size={12} className="mt-0.5 flex-shrink-0 text-blue-500" />}
+      <div
+        className={`text-xs px-3 py-2 rounded border flex items-start gap-2 ${
+          role === "admin"
+            ? "bg-[#0f1923]/5 border-[#0f1923]/20 text-gray-700"
+            : "bg-blue-50 border-blue-100 text-blue-800"
+        }`}
+      >
+        {role === "admin" ? (
+          <ShieldCheck size={12} className="mt-0.5 flex-shrink-0 text-gray-500" />
+        ) : (
+          <User size={12} className="mt-0.5 flex-shrink-0 text-blue-500" />
+        )}
         <span>
           {role === "admin"
             ? "Admin access — governance dashboard, approvals, and security controls."
@@ -144,7 +179,7 @@ function LoginView({ onLogin, onView }: { onLogin: (u: AuthUser) => void; onView
           <input
             type="email"
             value={email}
-            onChange={e => setEmail(e.target.value)}
+            onChange={(e) => setEmail(e.target.value)}
             placeholder={role === "admin" ? "admin@acme.com" : "you@company.com"}
             className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             autoComplete="email"
@@ -153,7 +188,11 @@ function LoginView({ onLogin, onView }: { onLogin: (u: AuthUser) => void; onView
         <div>
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs font-medium text-gray-600">Password</label>
-            <button type="button" onClick={() => onView("forgot")} className="text-xs text-blue-600 hover:underline">
+            <button
+              type="button"
+              onClick={() => onView("forgot")}
+              className="text-xs text-blue-600 hover:underline"
+            >
               Forgot password?
             </button>
           </div>
@@ -170,14 +209,23 @@ function LoginView({ onLogin, onView }: { onLogin: (u: AuthUser) => void; onView
             : "bg-blue-700 hover:bg-blue-600"
         }`}
       >
-        {loading
-          ? <><span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />Signing in…</>
-          : `Sign in as ${role === "admin" ? "Admin" : "Employee"}`}
+        {loading ? (
+          <>
+            <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+            Signing in…
+          </>
+        ) : (
+          `Sign in as ${role === "admin" ? "Admin" : "Employee"}`
+        )}
       </button>
 
       <p className="text-xs text-center text-gray-400">
         Don't have an account?{" "}
-        <button type="button" onClick={() => onView("signup")} className="text-blue-600 hover:underline font-medium">
+        <button
+          type="button"
+          onClick={() => onView("signup")}
+          className="text-blue-600 hover:underline font-medium"
+        >
           Create account
         </button>
       </p>
@@ -185,25 +233,29 @@ function LoginView({ onLogin, onView }: { onLogin: (u: AuthUser) => void; onView
       <div className="border-t border-gray-100 pt-3">
         <p className="text-xs text-gray-400 mb-1.5 font-medium">Quick demo — click to fill</p>
         <div className="grid grid-cols-2 gap-1.5">
-          <button type="button"
-            onClick={() => handleRoleChange("user")}
+          <button
+            type="button"
+            onClick={() => fillDemo("user")}
             className={`text-left text-xs px-2.5 py-2 rounded border transition-colors ${
               role === "user"
                 ? "border-blue-200 bg-blue-50 text-blue-800"
                 : "border-gray-100 bg-gray-50 text-gray-600 hover:bg-gray-100"
-            }`}>
+            }`}
+          >
             <div className="flex items-center gap-1 mb-0.5 font-medium">
               <User size={10} /> Employee
             </div>
             <p className="font-mono text-xs opacity-70 truncate">james.wu@acme.com</p>
           </button>
-          <button type="button"
-            onClick={() => handleRoleChange("admin")}
+          <button
+            type="button"
+            onClick={() => fillDemo("admin")}
             className={`text-left text-xs px-2.5 py-2 rounded border transition-colors ${
               role === "admin"
                 ? "border-gray-400 bg-[#0f1923]/5 text-gray-800"
                 : "border-gray-100 bg-gray-50 text-gray-600 hover:bg-gray-100"
-            }`}>
+            }`}
+          >
             <div className="flex items-center gap-1 mb-0.5 font-medium">
               <ShieldCheck size={10} /> Admin
             </div>
@@ -216,21 +268,66 @@ function LoginView({ onLogin, onView }: { onLogin: (u: AuthUser) => void; onView
 }
 
 function SignUpView({ onView }: { onView: (v: AuthView) => void }) {
-  const [form, setForm] = useState({ name: "", email: "", phone: "", dept: "", role: "", password: "", confirm: "" });
+  const [form, setForm] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    dept: "",
+    role: "",
+    password: "",
+    confirm: "",
+  });
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    setForm(v => ({ ...v, [k]: e.target.value }));
+  const set =
+    (k: keyof typeof form) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+      setForm((v) => ({ ...v, [k]: e.target.value }));
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.name || !form.email || !form.dept || !form.role || !form.password) { setError("Please fill in all fields."); return; }
-    if (form.password !== form.confirm) { setError("Passwords don't match."); return; }
-    if (form.password.length < 8) { setError("Password must be at least 8 characters."); return; }
-    setError(""); setLoading(true);
-    setTimeout(() => { setLoading(false); setSubmitted(true); }, 900);
+
+    if (!form.name || !form.email || !form.dept || !form.role || !form.password) {
+      setError("Please fill in all fields.");
+      return;
+    }
+    if (form.password !== form.confirm) {
+      setError("Passwords don't match.");
+      return;
+    }
+    if (form.password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+
+    setError("");
+    setLoading(true);
+
+    try {
+      const result = await registerUser({
+        fullName: form.name,
+        email: form.email,
+        phoneNumber: form.phone,
+        department: form.dept,
+        role: form.role === "admin" ? "admin" : "user",
+        password: form.password,
+      });
+
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+
+      setSubmitted(true);
+      // Brief success state, then return to login
+      window.setTimeout(() => onView("login"), 1800);
+    } catch {
+      setError("Something went wrong.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (submitted) {
@@ -240,13 +337,18 @@ function SignUpView({ onView }: { onView: (v: AuthView) => void }) {
           <CheckCircle size={22} className="text-green-600" />
         </div>
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">Request submitted</h2>
+          <h2 className="text-lg font-semibold text-gray-900">Account created</h2>
           <p className="text-sm text-gray-500 mt-1.5 leading-relaxed">
-            Your account request has been sent to your security team. You'll receive an email at <span className="font-medium text-gray-700">{form.email}</span> once approved.
+            Your account for{" "}
+            <span className="font-medium text-gray-700">{form.email}</span> is ready.
+            Redirecting to sign in…
           </p>
         </div>
-        <button onClick={() => onView("login")} className="w-full border border-gray-200 rounded py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors font-medium">
-          Back to sign in
+        <button
+          onClick={() => onView("login")}
+          className="w-full border border-gray-200 rounded py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors font-medium"
+        >
+          Continue to sign in
         </button>
       </div>
     );
@@ -255,12 +357,16 @@ function SignUpView({ onView }: { onView: (v: AuthView) => void }) {
   return (
     <form onSubmit={submit} className="space-y-4">
       <div className="flex items-center gap-2">
-        <button type="button" onClick={() => onView("login")} className="text-gray-400 hover:text-gray-600 transition-colors">
+        <button
+          type="button"
+          onClick={() => onView("login")}
+          className="text-gray-400 hover:text-gray-600 transition-colors"
+        >
           <ArrowLeft size={15} />
         </button>
         <div>
           <h2 className="text-xl font-semibold text-gray-900">Create account</h2>
-          <p className="text-sm text-gray-400 mt-0.5">Your security team will review and approve</p>
+          <p className="text-sm text-gray-400 mt-0.5">Set up your SentinelAI workspace</p>
         </div>
       </div>
 
@@ -273,31 +379,56 @@ function SignUpView({ onView }: { onView: (v: AuthView) => void }) {
       <div className="space-y-2.5">
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Full name</label>
-          <input type="text" value={form.name} onChange={set("name")} placeholder="Jane Smith"
-            className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <input
+            type="text"
+            value={form.name}
+            onChange={set("name")}
+            placeholder="Jane Smith"
+            className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Work email</label>
-          <input type="email" value={form.email} onChange={set("email")} placeholder="jane@company.com"
-            className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <input
+            type="email"
+            value={form.email}
+            onChange={set("email")}
+            placeholder="jane@company.com"
+            className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Phone number</label>
-          <input type="tel" value={form.phone} onChange={set("phone")} placeholder="+1 (555) 000-0000"
-            className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <input
+            type="tel"
+            value={form.phone}
+            onChange={set("phone")}
+            placeholder="+1 (555) 000-0000"
+            className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Department</label>
-          <select value={form.dept} onChange={set("dept")}
-            className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <select
+            value={form.dept}
+            onChange={set("dept")}
+            className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
             <option value="">Select department…</option>
-            {DEPTS.map(d => <option key={d} value={d}>{d}</option>)}
+            {DEPTS.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
           </select>
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Role</label>
-          <select value={form.role} onChange={set("role")}
-            className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <select
+            value={form.role}
+            onChange={set("role")}
+            className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
             <option value="">Select role…</option>
             <option value="employee">Employee</option>
             <option value="admin">Admin</option>
@@ -305,41 +436,78 @@ function SignUpView({ onView }: { onView: (v: AuthView) => void }) {
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Password</label>
-          <PasswordField value={form.password} onChange={v => setForm(f => ({ ...f, password: v }))} placeholder="At least 8 characters" />
+          <PasswordField
+            value={form.password}
+            onChange={(v) => setForm((f) => ({ ...f, password: v }))}
+            placeholder="At least 8 characters"
+          />
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Confirm password</label>
-          <PasswordField value={form.confirm} onChange={v => setForm(f => ({ ...f, confirm: v }))} placeholder="Repeat your password" />
+          <PasswordField
+            value={form.confirm}
+            onChange={(v) => setForm((f) => ({ ...f, confirm: v }))}
+            placeholder="Repeat your password"
+          />
         </div>
       </div>
 
-      <button type="submit" disabled={loading}
-        className="w-full bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white rounded py-2.5 text-sm font-semibold transition-colors flex items-center justify-center gap-2">
-        {loading
-          ? <><span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />Submitting…</>
-          : "Create account"}
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white rounded py-2.5 text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+      >
+        {loading ? (
+          <>
+            <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+            Submitting…
+          </>
+        ) : (
+          "Create account"
+        )}
       </button>
     </form>
   );
 }
 
 function ForgotView({ onView }: { onView: (v: AuthView) => void }) {
-  const [email, setEmail]     = useState("");
-  const [sent, setSent]       = useState(false);
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState("");
+  const [error, setError] = useState("");
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.includes("@")) { setError("Enter a valid email address."); return; }
-    setError(""); setLoading(true);
-    setTimeout(() => { setLoading(false); setSent(true); }, 700);
+    if (!email.includes("@")) {
+      setError("Enter a valid email address.");
+      return;
+    }
+
+    setError("");
+    setLoading(true);
+
+    try {
+      const result = await resetPassword(email);
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      setSent(true);
+    } catch {
+      setError("Something went wrong.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <form onSubmit={submit} className="space-y-4">
       <div className="flex items-center gap-2">
-        <button type="button" onClick={() => onView("login")} className="text-gray-400 hover:text-gray-600 transition-colors">
+        <button
+          type="button"
+          onClick={() => onView("login")}
+          className="text-gray-400 hover:text-gray-600 transition-colors"
+        >
           <ArrowLeft size={15} />
         </button>
         <div>
@@ -354,9 +522,14 @@ function ForgotView({ onView }: { onView: (v: AuthView) => void }) {
             <CheckCircle size={22} className="text-blue-600" />
           </div>
           <p className="text-sm text-gray-600 leading-relaxed">
-            If <span className="font-medium text-gray-800">{email}</span> is associated with an account, you'll receive a reset link within a few minutes.
+            If <span className="font-medium text-gray-800">{email}</span> is associated with an
+            account, you'll receive a reset link within a few minutes.
           </p>
-          <button type="button" onClick={() => onView("login")} className="w-full border border-gray-200 rounded py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors font-medium">
+          <button
+            type="button"
+            onClick={() => onView("login")}
+            className="w-full border border-gray-200 rounded py-2.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors font-medium"
+          >
             Back to sign in
           </button>
         </div>
@@ -369,12 +542,27 @@ function ForgotView({ onView }: { onView: (v: AuthView) => void }) {
           )}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Work email</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com"
-              className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+              className="w-full border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
-          <button type="submit" disabled={loading}
-            className="w-full bg-blue-700 hover:bg-blue-600 disabled:bg-blue-300 text-white rounded py-2.5 text-sm font-semibold transition-colors flex items-center justify-center gap-2">
-            {loading ? <><span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />Sending…</> : "Send reset link"}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-blue-700 hover:bg-blue-600 disabled:bg-blue-300 text-white rounded py-2.5 text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <>
+                <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                Sending…
+              </>
+            ) : (
+              "Send reset link"
+            )}
           </button>
         </>
       )}
@@ -396,7 +584,9 @@ export function AuthPage({ onLogin }: { onLogin: (u: AuthUser) => void }) {
         <div className="flex flex-col items-center justify-center flex-1 text-center">
           <p className="text-gray-500 text-xs font-medium mb-6">Enterprise governance</p>
           <h1 className="text-white text-3xl font-semibold leading-snug mb-5">
-            Enterprise AI access,<br />under control.
+            Enterprise AI access,
+            <br />
+            under control.
           </h1>
           <p className="text-gray-400 text-sm leading-relaxed max-w-xs">
             Every request is scanned, policy-checked, and audited before it reaches any model.
@@ -411,13 +601,14 @@ export function AuthPage({ onLogin }: { onLogin: (u: AuthUser) => void }) {
         </div>
 
         <div className="w-full max-w-sm bg-white border border-gray-200 rounded-lg p-8 shadow-sm">
-          {view === "login"  && <LoginView  onLogin={onLogin} onView={setView} />}
+          {view === "login" && <LoginView onLogin={onLogin} onView={setView} />}
           {view === "signup" && <SignUpView onView={setView} />}
           {view === "forgot" && <ForgotView onView={setView} />}
         </div>
 
         <p className="text-xs text-gray-400 mt-6 text-center">
-          Protected by SentinelAI · <a href="#" className="hover:underline">Privacy</a> · <a href="#" className="hover:underline">Terms</a>
+          Protected by SentinelAI · <a href="#" className="hover:underline">Privacy</a> ·{" "}
+          <a href="#" className="hover:underline">Terms</a>
         </p>
       </div>
     </div>
